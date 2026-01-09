@@ -43,6 +43,11 @@
       </div>
     </div>
 
+    <div style="margin:12px 0">
+      <label for="technicianPin">PIN</label>
+      <input id="technicianPin" type="password" placeholder="Introdueix el PIN" />
+    </div>
+
     <div class="row">
       <button id="btnEnter">Entrar</button>
       <span id="selectError" class="err"></span>
@@ -102,6 +107,7 @@
     const $viewMain = document.getElementById("viewMain");
 
     const $technicianSelect = document.getElementById("technicianSelect");
+    const $technicianPin = document.getElementById("technicianPin");
     const $btnEnter = document.getElementById("btnEnter");
     const $selectError = document.getElementById("selectError");
 
@@ -115,17 +121,26 @@
 
     const $status = document.getElementById("status");
     const $error = document.getElementById("error");
-
     const $ticketsList = document.getElementById("ticketsList");
 
     let selectedTech = null;
     let timers = [];
+
+    function clearTimers() {
+      for (const t of timers) clearInterval(t);
+      timers = [];
+    }
 
     function showSelect() {
       clearTimers();
       $viewMain.classList.add("hidden");
       $viewSelect.classList.remove("hidden");
       $selectError.textContent = "";
+      $error.textContent = "";
+      $status.textContent = "";
+      $budgetName.value = "";
+      // Per seguretat, no deixem el PIN escrit si tornes enrere
+      $technicianPin.value = "";
     }
 
     function showMain() {
@@ -144,17 +159,38 @@
       timers.push(setInterval(loadMyTickets, 10000));
     }
 
-    function clearTimers() {
-      for (const t of timers) clearInterval(t);
-      timers = [];
-    }
-
     function setError(msg) { $error.textContent = msg || ""; }
     function setStatus(msg) { $status.textContent = msg || ""; }
 
+    function saveSelectedTech(t) {
+      localStorage.setItem(LS_TECH_KEY, JSON.stringify(t));
+    }
+
+    function loadSelectedTech() {
+      try {
+        const raw = localStorage.getItem(LS_TECH_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    }
+
+    function clearSelectedTech() {
+      localStorage.removeItem(LS_TECH_KEY);
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
     function formatDate(ts) {
       try {
-        return new Date(ts).toLocaleString("ca-ES", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+        return new Date(ts).toLocaleString("ca-ES", {
+          year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit"
+        });
       } catch {
         return ts;
       }
@@ -163,6 +199,7 @@
     async function loadTechnicians() {
       $technicianSelect.innerHTML = `<option value="">Carregant...</option>`;
       const { data, error } = await sb.rpc("list_technicians");
+
       if (error) {
         $technicianSelect.innerHTML = `<option value="">Error carregant tècnics</option>`;
         $selectError.textContent = "No puc carregar el llistat de tècnics. Revisa la funció list_technicians().";
@@ -197,14 +234,19 @@
     }
 
     async function loadMyTickets() {
-      if (!selectedTech?.email) return;
+      if (!selectedTech?.email || !selectedTech?.pin) return;
 
-      const { data, error } = await sb.rpc("get_tickets_for_technician", {
-        technician_email: selectedTech.email
+      const { data, error } = await sb.rpc("get_tickets_for_technician_pin", {
+        technician_email: selectedTech.email,
+        technician_pin: selectedTech.pin
       });
 
       if (error) {
+        // Si el PIN ja no és vàlid (canviat a BD), forcem re-selecció
+        setError("PIN incorrecte o caducat. Torna a seleccionar tècnic.");
         console.error(error);
+        await loadTechnicians();
+        showSelect();
         return;
       }
 
@@ -218,7 +260,6 @@
 
       for (const r of data) {
         const li = document.createElement("li");
-
         const top = document.createElement("div");
         top.className = "ticketLine";
 
@@ -231,27 +272,17 @@
 
         top.appendChild(left);
         top.appendChild(right);
-
         li.appendChild(top);
         $ticketsList.appendChild(li);
       }
     }
 
-    // Evita problemes si el nom té caràcters especials
-    function escapeHtml(str) {
-      return String(str)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
-
     async function takeTicket() {
-      if (!selectedTech) {
+      if (!selectedTech?.email || !selectedTech?.pin) {
         setError("No hi ha tècnic seleccionat.");
         return;
       }
+
       const budget = ($budgetName.value || "").trim();
       if (!budget) {
         setError("Has d'escriure el nom del pressupost abans d'agafar número.");
@@ -262,9 +293,9 @@
       setError("");
       setStatus("Assignant número...");
 
-      const { data, error } = await sb.rpc("take_ticket", {
-        technician_name: selectedTech.name,
+      const { data, error } = await sb.rpc("take_ticket_pin", {
         technician_email: selectedTech.email,
+        technician_pin: selectedTech.pin,
         budget_name: budget
       });
 
@@ -279,7 +310,6 @@
       setStatus("Número assignat: " + data);
       $budgetName.value = "";
       await refreshAll();
-
       $btnTake.disabled = false;
     }
 
@@ -288,33 +318,37 @@
       await loadMyTickets();
     }
 
-    function saveSelectedTech(t) {
-      localStorage.setItem(LS_TECH_KEY, JSON.stringify(t));
-    }
-
-    function loadSelectedTech() {
-      try {
-        const raw = localStorage.getItem(LS_TECH_KEY);
-        return raw ? JSON.parse(raw) : null;
-      } catch { return null; }
-    }
-
-    function clearSelectedTech() {
-      localStorage.removeItem(LS_TECH_KEY);
-    }
-
     // Events
-    $btnEnter.addEventListener("click", () => {
+    $btnEnter.addEventListener("click", async () => {
+      $selectError.textContent = "";
+
       const opt = $technicianSelect.options[$technicianSelect.selectedIndex];
       const email = opt?.dataset?.email || "";
       const name = opt?.dataset?.name || "";
+      const pin = ($technicianPin.value || "").trim();
 
       if (!email || !name) {
         $selectError.textContent = "Selecciona un tècnic per continuar.";
         return;
       }
+      if (!pin) {
+        $selectError.textContent = "Introdueix el PIN.";
+        return;
+      }
 
-      selectedTech = { name, email };
+      // Validació del PIN: si falla, no entrem
+      const { error } = await sb.rpc("get_tickets_for_technician_pin", {
+        technician_email: email,
+        technician_pin: pin
+      });
+
+      if (error) {
+        $selectError.textContent = "PIN incorrecte o tècnic no autoritzat.";
+        console.error(error);
+        return;
+      }
+
+      selectedTech = { name, email, pin };
       saveSelectedTech(selectedTech);
       showMain();
     });
@@ -338,12 +372,26 @@
     (async function init() {
       await loadTechnicians();
       const t = loadSelectedTech();
-      if (t?.email && t?.name) {
-        selectedTech = t;
-        showMain();
-      } else {
-        showSelect();
+
+      // Intentem reutilitzar sessió guardada (si existeix)
+      if (t?.email && t?.name && t?.pin) {
+        // Validem PIN abans d'entrar automàticament
+        const { error } = await sb.rpc("get_tickets_for_technician_pin", {
+          technician_email: t.email,
+          technician_pin: t.pin
+        });
+
+        if (!error) {
+          selectedTech = t;
+          showMain();
+          return;
+        }
+
+        // Si no és vàlid, netegem sessió local
+        clearSelectedTech();
       }
+
+      showSelect();
     })();
   </script>
 </body>
