@@ -5,28 +5,78 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Dispensador de números</title>
   <style>
-    body { font-family: system-ui, Arial; max-width: 760px; margin: 32px auto; padding: 0 16px; }
+    body { font-family: system-ui, Arial; max-width: 860px; margin: 32px auto; padding: 0 16px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
-    button { padding: 12px 16px; border-radius: 10px; border: 1px solid #222; background: #222; color: #fff; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: not-allowed; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     .muted { color: #666; font-size: 14px; }
     .big { font-size: 28px; font-weight: 700; }
     .err { color: #b00020; }
-    ul { padding-left: 20px; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    button { padding: 12px 16px; border-radius: 10px; border: 1px solid #222; background: #222; color: #fff; cursor: pointer; }
+    button.secondary { background:#fff; color:#222; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    select, input { padding: 12px 12px; border-radius: 10px; border: 1px solid #ccc; min-width: 280px; }
+    label { display:block; margin-bottom: 6px; font-weight: 600; }
+    .hidden { display: none; }
+    #ticketsScroll { max-height: 260px; overflow-y: auto; border: 1px solid #eee; border-radius: 10px; padding: 10px; }
+    #ticketsList { list-style: none; padding: 0; margin: 0; }
+    #ticketsList li { padding: 10px; border-bottom: 1px solid #f0f0f0; }
+    #ticketsList li:last-child { border-bottom: none; }
+    .ticketLine { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .ticketNo { font-weight:700; }
+    .ticketMeta { color:#666; font-size:13px; }
   </style>
 </head>
 <body>
   <h1>Agafar número</h1>
 
-  <div class="card">
+  <!-- Vista 1: Selecció de tècnic -->
+  <div id="viewSelect" class="card hidden">
+    <h2 style="margin-top:0">Selecciona el tècnic</h2>
+
+    <div style="margin:12px 0">
+      <label for="technicianSelect">Tècnic (nom · correu)</label>
+      <select id="technicianSelect">
+        <option value="">Carregant tècnics...</option>
+      </select>
+      <div class="muted" style="margin-top:8px">
+        Si no apareix ningú, revisa que hagis inserit tècnics a la taula <code>technicians</code>.
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btnEnter">Entrar</button>
+      <span id="selectError" class="err"></span>
+    </div>
+  </div>
+
+  <!-- Vista 2: Pantalla principal -->
+  <div id="viewMain" class="card hidden">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <div class="muted">Tècnic seleccionat</div>
+        <div id="techLabel" style="font-weight:700">—</div>
+      </div>
+      <button id="btnChangeTech" class="secondary">Canviar tècnic</button>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
+
     <div class="row">
       <div>
         <div class="muted">Proper número disponible (orientatiu)</div>
         <div id="nextTicket" class="big">—</div>
       </div>
       <div style="flex:1"></div>
+    </div>
+
+    <div style="margin-top:16px">
+      <label for="budgetName">Nom del pressupost (obligatori)</label>
+      <input id="budgetName" type="text" placeholder="Ex: Pressupost reforma local Rambla..." />
+    </div>
+
+    <div class="row" style="margin-top:12px">
       <button id="btnTake">Agafar número</button>
+      <button id="btnClearLocal" class="secondary">Netejar camp</button>
     </div>
 
     <p id="status" class="muted"></p>
@@ -34,9 +84,10 @@
 
     <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
 
-    <div class="muted">Números que has agafat (aquest dispositiu/navegador)</div>
-    <ul id="myTickets"></ul>
-    <button id="btnClear" style="background:#fff;color:#222;margin-top:8px">Esborrar llista local</button>
+    <div class="muted" style="margin-bottom:8px">Registre de números agafats per aquest tècnic</div>
+    <div id="ticketsScroll">
+      <ul id="ticketsList"></ul>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -45,67 +96,255 @@
     const SUPABASE_KEY = "sb_publishable_VZOg0lQDe3snNR0bPgmwxA_NnWoRDvX";
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+    const LS_TECH_KEY = "selected_technician_v1";
+
+    const $viewSelect = document.getElementById("viewSelect");
+    const $viewMain = document.getElementById("viewMain");
+
+    const $technicianSelect = document.getElementById("technicianSelect");
+    const $btnEnter = document.getElementById("btnEnter");
+    const $selectError = document.getElementById("selectError");
+
+    const $techLabel = document.getElementById("techLabel");
+    const $btnChangeTech = document.getElementById("btnChangeTech");
+
     const $next = document.getElementById("nextTicket");
-    const $btn = document.getElementById("btnTake");
+    const $budgetName = document.getElementById("budgetName");
+    const $btnTake = document.getElementById("btnTake");
+    const $btnClearLocal = document.getElementById("btnClearLocal");
+
     const $status = document.getElementById("status");
     const $error = document.getElementById("error");
-    const $list = document.getElementById("myTickets");
-    const $clear = document.getElementById("btnClear");
 
-    const LS_KEY = "my_taken_tickets_v1";
+    const $ticketsList = document.getElementById("ticketsList");
 
-    function loadLocalTickets() {
-      try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); }
-      catch { return []; }
+    let selectedTech = null;
+    let timers = [];
+
+    function showSelect() {
+      clearTimers();
+      $viewMain.classList.add("hidden");
+      $viewSelect.classList.remove("hidden");
+      $selectError.textContent = "";
     }
-    function saveLocalTickets(arr) { localStorage.setItem(LS_KEY, JSON.stringify(arr)); }
-    function renderLocalTickets() {
-      const t = loadLocalTickets();
-      $list.innerHTML = "";
-      for (const n of t) {
-        const li = document.createElement("li");
-        li.textContent = n;
-        $list.appendChild(li);
-      }
+
+    function showMain() {
+      $viewSelect.classList.add("hidden");
+      $viewMain.classList.remove("hidden");
+      $error.textContent = "";
+      $status.textContent = "";
+      $techLabel.textContent = `${selectedTech.name} · ${selectedTech.email}`;
+      refreshAll();
+      setTimers();
     }
+
+    function setTimers() {
+      clearTimers();
+      timers.push(setInterval(refreshNext, 3000));
+      timers.push(setInterval(loadMyTickets, 10000));
+    }
+
+    function clearTimers() {
+      for (const t of timers) clearInterval(t);
+      timers = [];
+    }
+
     function setError(msg) { $error.textContent = msg || ""; }
     function setStatus(msg) { $status.textContent = msg || ""; }
 
-    async function refreshNext() {
-      const { data, error } = await sb.rpc("peek_next_ticket");
-      if (error) { $next.textContent = "—"; return; }
-      $next.textContent = data;
+    function formatDate(ts) {
+      try {
+        return new Date(ts).toLocaleString("ca-ES", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+      } catch {
+        return ts;
+      }
     }
 
-    async function takeTicket() {
-      $btn.disabled = true;
-      setError("");
-      setStatus("Assignant número...");
-      const { data, error } = await sb.rpc("take_ticket");
+    async function loadTechnicians() {
+      $technicianSelect.innerHTML = `<option value="">Carregant...</option>`;
+      const { data, error } = await sb.rpc("list_technicians");
       if (error) {
-        setStatus("");
-        setError("Error assignant número: " + error.message);
-        $btn.disabled = false;
+        $technicianSelect.innerHTML = `<option value="">Error carregant tècnics</option>`;
+        $selectError.textContent = "No puc carregar el llistat de tècnics. Revisa la funció list_technicians().";
+        console.error(error);
         return;
       }
 
-      const my = loadLocalTickets();
-      my.push(data);
-      saveLocalTickets(my);
-      renderLocalTickets();
+      if (!data || data.length === 0) {
+        $technicianSelect.innerHTML = `<option value="">No hi ha tècnics actius</option>`;
+        return;
+      }
 
-      setStatus("Número assignat: " + data);
-      await refreshNext();
-      $btn.disabled = false;
+      $technicianSelect.innerHTML = `<option value="">— Selecciona un tècnic —</option>`;
+      for (const t of data) {
+        const opt = document.createElement("option");
+        opt.value = t.email;
+        opt.textContent = `${t.name} · ${t.email}`;
+        opt.dataset.name = t.name;
+        opt.dataset.email = t.email;
+        $technicianSelect.appendChild(opt);
+      }
     }
 
-    setInterval(refreshNext, 3000);
-    renderLocalTickets();
-    refreshNext();
+    async function refreshNext() {
+      const { data, error } = await sb.rpc("peek_next_ticket");
+      if (error) {
+        $next.textContent = "—";
+        console.error(error);
+        return;
+      }
+      $next.textContent = data;
+    }
 
-    $btn.addEventListener("click", takeTicket);
-    $clear.addEventListener("click", () => { saveLocalTickets([]); renderLocalTickets(); });
+    async function loadMyTickets() {
+      if (!selectedTech?.email) return;
+
+      const { data, error } = await sb.rpc("get_tickets_for_technician", {
+        technician_email: selectedTech.email
+      });
+
+      if (error) {
+        console.error(error);
+        return;
+      }
+
+      $ticketsList.innerHTML = "";
+      if (!data || data.length === 0) {
+        const li = document.createElement("li");
+        li.textContent = "Encara no has agafat cap número.";
+        $ticketsList.appendChild(li);
+        return;
+      }
+
+      for (const r of data) {
+        const li = document.createElement("li");
+
+        const top = document.createElement("div");
+        top.className = "ticketLine";
+
+        const left = document.createElement("div");
+        left.innerHTML = `<span class="ticketNo">#${r.ticket_no}</span> — ${escapeHtml(r.budget_name || "")}`;
+
+        const right = document.createElement("div");
+        right.className = "ticketMeta";
+        right.textContent = formatDate(r.requested_at);
+
+        top.appendChild(left);
+        top.appendChild(right);
+
+        li.appendChild(top);
+        $ticketsList.appendChild(li);
+      }
+    }
+
+    // Evita problemes si el nom té caràcters especials
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function takeTicket() {
+      if (!selectedTech) {
+        setError("No hi ha tècnic seleccionat.");
+        return;
+      }
+      const budget = ($budgetName.value || "").trim();
+      if (!budget) {
+        setError("Has d'escriure el nom del pressupost abans d'agafar número.");
+        return;
+      }
+
+      $btnTake.disabled = true;
+      setError("");
+      setStatus("Assignant número...");
+
+      const { data, error } = await sb.rpc("take_ticket", {
+        technician_name: selectedTech.name,
+        technician_email: selectedTech.email,
+        budget_name: budget
+      });
+
+      if (error) {
+        setStatus("");
+        setError("Error assignant número: " + error.message);
+        console.error(error);
+        $btnTake.disabled = false;
+        return;
+      }
+
+      setStatus("Número assignat: " + data);
+      $budgetName.value = "";
+      await refreshAll();
+
+      $btnTake.disabled = false;
+    }
+
+    async function refreshAll() {
+      await refreshNext();
+      await loadMyTickets();
+    }
+
+    function saveSelectedTech(t) {
+      localStorage.setItem(LS_TECH_KEY, JSON.stringify(t));
+    }
+
+    function loadSelectedTech() {
+      try {
+        const raw = localStorage.getItem(LS_TECH_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    }
+
+    function clearSelectedTech() {
+      localStorage.removeItem(LS_TECH_KEY);
+    }
+
+    // Events
+    $btnEnter.addEventListener("click", () => {
+      const opt = $technicianSelect.options[$technicianSelect.selectedIndex];
+      const email = opt?.dataset?.email || "";
+      const name = opt?.dataset?.name || "";
+
+      if (!email || !name) {
+        $selectError.textContent = "Selecciona un tècnic per continuar.";
+        return;
+      }
+
+      selectedTech = { name, email };
+      saveSelectedTech(selectedTech);
+      showMain();
+    });
+
+    $btnChangeTech.addEventListener("click", async () => {
+      clearSelectedTech();
+      selectedTech = null;
+      await loadTechnicians();
+      showSelect();
+    });
+
+    $btnTake.addEventListener("click", takeTicket);
+
+    $btnClearLocal.addEventListener("click", () => {
+      $budgetName.value = "";
+      setError("");
+      setStatus("");
+    });
+
+    // Init
+    (async function init() {
+      await loadTechnicians();
+      const t = loadSelectedTech();
+      if (t?.email && t?.name) {
+        selectedTech = t;
+        showMain();
+      } else {
+        showSelect();
+      }
+    })();
   </script>
 </body>
 </html>
-
